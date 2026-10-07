@@ -2120,6 +2120,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
 
   final TextEditingController roomController = TextEditingController();
 
+  // NEW: Notes field
+  final TextEditingController notesController = TextEditingController();
+
   Employee? employee;
 
   bool loading = false;
@@ -2128,6 +2131,7 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
   void dispose() {
     empController.dispose();
     roomController.dispose();
+    notesController.dispose();
     super.dispose();
   }
 
@@ -2147,6 +2151,7 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
       loading = true;
       employee = null;
       roomController.clear();
+      notesController.clear();
     });
 
     try {
@@ -2161,6 +2166,7 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
       setState(() {
         employee = result;
         roomController.clear();
+        notesController.clear();
       });
     } catch (e) {
       if (!mounted) return;
@@ -2219,11 +2225,35 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
 
     final room = roomController.text.trim();
 
-    if (room.isEmpty) {
+    final notes = notesController.text.trim();
+
+    // Room No. OR Notes - at least one is required.
+    if (room.isEmpty && notes.isEmpty) {
       showMessage(
-        'Enter Room No.',
+        'Enter Room No. or Notes.',
       );
       return;
+    }
+
+    // ----------------------------------------------------------
+    // FINAL ROOM VALUE
+    //
+    // Room only:
+    // 205
+    //
+    // Notes only:
+    // ADMIN OFFICE PC
+    //
+    // Both:
+    // 205 | ADMIN OFFICE PC
+    // ----------------------------------------------------------
+
+    String finalRoom = room;
+
+    if (room.isNotEmpty && notes.isNotEmpty) {
+      finalRoom = '$room | $notes';
+    } else if (room.isEmpty && notes.isNotEmpty) {
+      finalRoom = notes;
     }
 
     final confirm = await showDialog<bool>(
@@ -2250,7 +2280,7 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                 'Mobile No.: ${employee!.mobile}',
               ),
               Text(
-                'Room No.: $room',
+                'Room No.: $finalRoom',
               ),
               const SizedBox(
                 height: 12,
@@ -2268,7 +2298,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                   false,
                 );
               },
-              child: const Text('CANCEL'),
+              child: const Text(
+                'CANCEL',
+              ),
             ),
             FilledButton(
               onPressed: () {
@@ -2277,7 +2309,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                   true,
                 );
               },
-              child: const Text('SUBMIT'),
+              child: const Text(
+                'SUBMIT',
+              ),
             ),
           ],
         );
@@ -2298,7 +2332,7 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
         name: employee!.name,
         company: employee!.company,
         mobile: employee!.mobile,
-        room: room,
+        room: finalRoom,
         issuedBy: widget.loggedUser,
       );
 
@@ -2338,6 +2372,7 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
     setState(() {
       empController.clear();
       roomController.clear();
+      notesController.clear();
       employee = null;
     });
   }
@@ -2447,6 +2482,28 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                       ),
                     ),
                   ),
+
+                // ==================================================
+                // NOTES
+                // ==================================================
+
+                if (employee != null)
+                  const SizedBox(
+                    height: 12,
+                  ),
+
+                if (employee != null)
+                  TextField(
+                    controller: notesController,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      labelText: 'Notes',
+                      prefixIcon: Icon(
+                        Icons.note,
+                      ),
+                    ),
+                  ),
+
                 if (employee != null)
                   const SizedBox(
                     height: 20,
@@ -2581,10 +2638,6 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
     super.dispose();
   }
 
-  // ==========================================================
-  // GET AVAILABLE VOUCHER COUNT
-  // ==========================================================
-
   Future<void> loadAvailableVoucherCount() async {
     if (loadingAvailable) {
       return;
@@ -2629,10 +2682,6 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
     }
   }
 
-  // ==========================================================
-  // FLEXIBLE COUNT READER
-  // ==========================================================
-
   int extractAvailableVoucherCount(
     Map<String, dynamic> result,
   ) {
@@ -2666,10 +2715,6 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
       }
     }
 
-    // ----------------------------------------------------------
-    // Check nested data
-    // ----------------------------------------------------------
-
     final nestedCandidates = [
       result['data'],
       result['vouchers'],
@@ -2684,7 +2729,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
       }
 
       if (value is Map) {
-        final nestedMap = Map<String, dynamic>.from(value);
+        final nestedMap = Map<String, dynamic>.from(
+          value,
+        );
 
         for (final key in possibleKeys) {
           if (nestedMap.containsKey(key)) {
@@ -2708,10 +2755,6 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
 
     return 0;
   }
-
-  // ==========================================================
-  // ADD MANUAL PIN
-  // ==========================================================
 
   Future<void> addManualPin() async {
     final pin = pinController.text.trim();
@@ -2743,7 +2786,6 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
         'Voucher PIN added successfully.',
       );
 
-      // Refresh available count
       await loadAvailableVoucherCount();
     } catch (e) {
       if (!mounted) return;
@@ -2763,10 +2805,6 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
     }
   }
 
-  // ==========================================================
-  // MESSAGE
-  // ==========================================================
-
   void showMessage(
     String message,
   ) {
@@ -2780,10 +2818,6 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
       ),
     );
   }
-
-  // ==========================================================
-  // BUILD
-  // ==========================================================
 
   @override
   Widget build(
@@ -2804,14 +2838,12 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  // ==================================================
-                  // AVAILABLE VOUCHER COUNT
-                  // ==================================================
-
                   Card(
                     elevation: 0,
                     child: Padding(
-                      padding: const EdgeInsets.all(18),
+                      padding: const EdgeInsets.all(
+                        18,
+                      ),
                       child: Row(
                         children: [
                           Container(
@@ -2885,19 +2917,15 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                       ),
                     ),
                   ),
-
                   const SizedBox(
                     height: 20,
                   ),
-
-                  // ==================================================
-                  // MANUAL PIN
-                  // ==================================================
-
                   Card(
                     elevation: 0,
                     child: Padding(
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.all(
+                        20,
+                      ),
                       child: Column(
                         children: [
                           const Icon(
@@ -2970,19 +2998,15 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                       ),
                     ),
                   ),
-
                   const SizedBox(
                     height: 20,
                   ),
-
-                  // ==================================================
-                  // PDF / OCR
-                  // ==================================================
-
                   Card(
                     elevation: 0,
                     child: const Padding(
-                      padding: EdgeInsets.all(16),
+                      padding: EdgeInsets.all(
+                        16,
+                      ),
                       child: ListTile(
                         leading: Icon(
                           Icons.picture_as_pdf,
@@ -3106,9 +3130,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
       body: SafeArea(
         child: Column(
           children: [
-            // ==================================================
-            // SMALL CONTINUOUS CAMERA AREA AT TOP
-            // ==================================================
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 12,
@@ -3117,7 +3138,9 @@ class _QrScannerPageState extends State<QrScannerPage> {
                 0,
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(
+                  16,
+                ),
                 child: SizedBox(
                   width: double.infinity,
                   height: 220,
@@ -3128,8 +3151,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
                         controller: scannerController,
                         onDetect: onDetect,
                       ),
-
-                      // Scan frame
                       Center(
                         child: Container(
                           width: 170,
@@ -3139,12 +3160,12 @@ class _QrScannerPageState extends State<QrScannerPage> {
                               color: Colors.white,
                               width: 3,
                             ),
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(
+                              12,
+                            ),
                           ),
                         ),
                       ),
-
-                      // Flash button inside camera
                       Positioned(
                         top: 10,
                         right: 10,
@@ -3168,25 +3189,18 @@ class _QrScannerPageState extends State<QrScannerPage> {
                 ),
               ),
             ),
-
             const SizedBox(
               height: 8,
             ),
-
             const Text(
               'Place employee QR inside the frame',
               style: TextStyle(
                 color: Colors.grey,
               ),
             ),
-
             const SizedBox(
               height: 8,
             ),
-
-            // ==================================================
-            // REMAINING CONTENT SCROLLABLE
-            // ==================================================
             Expanded(
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -3204,7 +3218,9 @@ class _QrScannerPageState extends State<QrScannerPage> {
                     const Icon(
                       Icons.qr_code_scanner,
                       size: 65,
-                      color: Color(0xFF087F5B),
+                      color: Color(
+                        0xFF087F5B,
+                      ),
                     ),
                     const SizedBox(
                       height: 15,
@@ -3604,6 +3620,18 @@ class _HistoryPageState extends State<HistoryPage> {
 
   List<VoucherRecord> history = [];
 
+  // ==========================================================
+  // EMP CODE SEARCH
+  // ==========================================================
+
+  final TextEditingController empCodeController = TextEditingController();
+
+  @override
+  void dispose() {
+    empCodeController.dispose();
+    super.dispose();
+  }
+
   Future<void> selectFromDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -3642,6 +3670,10 @@ class _HistoryPageState extends State<HistoryPage> {
         '${date.day.toString().padLeft(2, '0')}';
   }
 
+  // ==========================================================
+  // SEARCH HISTORY
+  // ==========================================================
+
   Future<void> searchHistory() async {
     if (loading) {
       return;
@@ -3654,6 +3686,8 @@ class _HistoryPageState extends State<HistoryPage> {
       return;
     }
 
+    FocusScope.of(context).unfocus();
+
     setState(() {
       loading = true;
     });
@@ -3662,6 +3696,9 @@ class _HistoryPageState extends State<HistoryPage> {
       final from = dateString(fromDate);
 
       final to = dateString(toDate);
+
+      // Emp Code search value
+      final searchEmpCode = empCodeController.text.trim().toUpperCase();
 
       debugPrint(
         '========================================',
@@ -3680,8 +3717,16 @@ class _HistoryPageState extends State<HistoryPage> {
       );
 
       debugPrint(
+        'EMP CODE: $searchEmpCode',
+      );
+
+      debugPrint(
         '========================================',
       );
+
+      // --------------------------------------------------------
+      // GET HISTORY FROM SERVER
+      // --------------------------------------------------------
 
       final result = await api.getHistory(
         fromDate: from,
@@ -3690,19 +3735,48 @@ class _HistoryPageState extends State<HistoryPage> {
 
       if (!mounted) return;
 
+      // --------------------------------------------------------
+      // FILTER BY EMP CODE
+      //
+      // Empty Emp Code = show all history
+      //
+      // Emp Code entered = show only matching employee
+      // --------------------------------------------------------
+
+      final filteredResult = searchEmpCode.isEmpty
+          ? result
+          : result.where(
+              (item) {
+                final recordEmpCode = item.empCode.trim().toUpperCase();
+
+                return recordEmpCode.contains(
+                  searchEmpCode,
+                );
+              },
+            ).toList();
+
       setState(() {
-        history = result;
+        history = filteredResult;
       });
 
       debugPrint(
-        'HISTORY LOADED: '
-        '${result.length}',
+        'TOTAL HISTORY: ${result.length}',
       );
 
-      if (result.isEmpty) {
-        showMessage(
-          'No records found for selected date.',
-        );
+      debugPrint(
+        'FILTERED HISTORY: ${filteredResult.length}',
+      );
+
+      if (filteredResult.isEmpty) {
+        if (searchEmpCode.isEmpty) {
+          showMessage(
+            'No records found for selected date.',
+          );
+        } else {
+          showMessage(
+            'No records found for Emp Code: $searchEmpCode',
+          );
+        }
       }
     } catch (e) {
       debugPrint(
@@ -3777,10 +3851,40 @@ class _HistoryPageState extends State<HistoryPage> {
           subtitle: 'Voucher Issue History',
           icon: Icons.history,
         ),
+
         Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
             children: [
+              // ==================================================
+              // EMP CODE SEARCH
+              // ==================================================
+
+              TextField(
+                controller: empCodeController,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Emp Code',
+                  hintText: 'Enter Emp Code',
+                  prefixIcon: Icon(
+                    Icons.badge,
+                  ),
+                ),
+                onSubmitted: (_) {
+                  if (!loading) {
+                    searchHistory();
+                  }
+                },
+              ),
+
+              const SizedBox(
+                height: 8,
+              ),
+
+              // ==================================================
+              // DATE SEARCH
+              // ==================================================
+
               Row(
                 children: [
                   Expanded(
@@ -3814,9 +3918,15 @@ class _HistoryPageState extends State<HistoryPage> {
                   ),
                 ],
               ),
+
               const SizedBox(
                 height: 8,
               ),
+
+              // ==================================================
+              // SEARCH BUTTON
+              // ==================================================
+
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -3832,11 +3942,17 @@ class _HistoryPageState extends State<HistoryPage> {
             ],
           ),
         ),
+
         if (loading)
           const Padding(
             padding: EdgeInsets.all(15),
             child: CircularProgressIndicator(),
           ),
+
+        // ========================================================
+        // HISTORY LIST
+        // ========================================================
+
         Expanded(
           child: history.isEmpty
               ? const Center(
@@ -3935,7 +4051,9 @@ Widget appHeader({
           ),
           child: Icon(
             icon,
-            color: const Color(0xFF087F5B),
+            color: const Color(
+              0xFF087F5B,
+            ),
             size: 30,
           ),
         ),
