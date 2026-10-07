@@ -1007,6 +1007,15 @@ class ApiService {
   ) async {
     final prefs = await SharedPreferences.getInstance();
 
+    // Clear old individual and master caches so deleted employees are removed completely
+    final keys = prefs.getKeys();
+    for (final key in keys) {
+      if (key.startsWith(employeeCachePrefix) ||
+          key == employeeMasterCacheKey) {
+        await prefs.remove(key);
+      }
+    }
+
     final Map<String, dynamic> cache = {};
 
     for (final employee in employees) {
@@ -1218,18 +1227,7 @@ class ApiService {
       return masterCached;
     }
 
-    final individualCached = await getCachedEmployee(
-      code,
-    );
-
-    if (individualCached != null) {
-      debugPrint(
-        'INDIVIDUAL CACHE USED: $code',
-      );
-
-      return individualCached;
-    }
-
+    // If not found in master cache, check directly with server to ensure removed ones aren't retrieved from stale caches
     try {
       final result = await post(
         {
@@ -1264,10 +1262,6 @@ class ApiService {
 
       return employee;
     } catch (e) {
-      if (individualCached != null) {
-        return individualCached;
-      }
-
       rethrow;
     }
   }
@@ -3043,16 +3037,19 @@ class QrScannerPage extends StatefulWidget {
   State<QrScannerPage> createState() => _QrScannerPageState();
 }
 
-class _QrScannerPageState extends State<QrScannerPage> {
+class _QrScannerPageState extends State<QrScannerPage>
+    with WidgetsBindingObserver {
   late final MobileScannerController scannerController;
 
   bool scanned = false;
-
   bool torchOn = false;
+  bool cameraStarted = false;
 
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
 
     scannerController = MobileScannerController(
       detectionSpeed: DetectionSpeed.noDuplicates,
@@ -3063,8 +3060,61 @@ class _QrScannerPageState extends State<QrScannerPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+
     scannerController.dispose();
+
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
+    if (state == AppLifecycleState.resumed) {
+      if (!scanned) {
+        startCamera();
+      }
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      stopCamera();
+    }
+  }
+
+  Future<void> startCamera() async {
+    if (scanned) {
+      return;
+    }
+
+    try {
+      await scannerController.start();
+
+      if (!mounted) return;
+
+      setState(() {
+        cameraStarted = true;
+      });
+    } catch (e) {
+      debugPrint(
+        'CAMERA START ERROR: $e',
+      );
+    }
+  }
+
+  Future<void> stopCamera() async {
+    try {
+      await scannerController.stop();
+
+      if (!mounted) return;
+
+      setState(() {
+        cameraStarted = false;
+      });
+    } catch (e) {
+      debugPrint(
+        'CAMERA STOP ERROR: $e',
+      );
+    }
   }
 
   Future<void> toggleTorch() async {
@@ -3083,9 +3133,9 @@ class _QrScannerPageState extends State<QrScannerPage> {
     }
   }
 
-  void onDetect(
+  Future<void> onDetect(
     BarcodeCapture capture,
-  ) {
+  ) async {
     if (scanned) {
       return;
     }
@@ -3096,7 +3146,11 @@ class _QrScannerPageState extends State<QrScannerPage> {
       if (value != null && value.trim().isNotEmpty) {
         scanned = true;
 
-        scannerController.stop();
+        try {
+          await scannerController.stop();
+        } catch (_) {}
+
+        if (!mounted) return;
 
         Navigator.pop(
           context,
@@ -3150,6 +3204,14 @@ class _QrScannerPageState extends State<QrScannerPage> {
                       MobileScanner(
                         controller: scannerController,
                         onDetect: onDetect,
+                        onDetectError: (
+                          error,
+                          stackTrace,
+                        ) {
+                          debugPrint(
+                            'QR CAMERA ERROR: $error',
+                          );
+                        },
                       ),
                       Center(
                         child: Container(
