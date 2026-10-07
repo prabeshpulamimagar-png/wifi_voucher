@@ -2544,16 +2544,174 @@ class VoucherUploadPage extends StatefulWidget {
   State<VoucherUploadPage> createState() => _VoucherUploadPageState();
 }
 
-class _VoucherUploadPageState extends State<VoucherUploadPage> {
+class _VoucherUploadPageState extends State<VoucherUploadPage>
+    with WidgetsBindingObserver {
   final TextEditingController pinController = TextEditingController();
 
   bool loading = false;
 
+  bool loadingAvailable = false;
+
+  int availableVoucherCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
+
+    loadAvailableVoucherCount();
+  }
+
+  @override
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
+    if (state == AppLifecycleState.resumed) {
+      loadAvailableVoucherCount();
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+
     pinController.dispose();
+
     super.dispose();
   }
+
+  // ==========================================================
+  // GET AVAILABLE VOUCHER COUNT
+  // ==========================================================
+
+  Future<void> loadAvailableVoucherCount() async {
+    if (loadingAvailable) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        loadingAvailable = true;
+      });
+    }
+
+    try {
+      final result = await api.get(
+        {
+          'action': 'getAvailableVouchers',
+        },
+      );
+
+      debugPrint(
+        'AVAILABLE VOUCHER RESPONSE: $result',
+      );
+
+      int count = extractAvailableVoucherCount(
+        result,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        availableVoucherCount = count;
+      });
+    } catch (e) {
+      debugPrint(
+        'AVAILABLE VOUCHER COUNT ERROR: $e',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          loadingAvailable = false;
+        });
+      }
+    }
+  }
+
+  // ==========================================================
+  // FLEXIBLE COUNT READER
+  // ==========================================================
+
+  int extractAvailableVoucherCount(
+    Map<String, dynamic> result,
+  ) {
+    const possibleKeys = [
+      'availableCount',
+      'availableVoucherCount',
+      'availableVouchers',
+      'available',
+      'count',
+      'totalAvailable',
+      'remaining',
+      'remainingVouchers',
+      'balance',
+    ];
+
+    for (final key in possibleKeys) {
+      if (result.containsKey(key)) {
+        final value = result[key];
+
+        final parsed = int.tryParse(
+          '$value'.trim(),
+        );
+
+        if (parsed != null) {
+          return parsed;
+        }
+
+        if (value is List) {
+          return value.length;
+        }
+      }
+    }
+
+    // ----------------------------------------------------------
+    // Check nested data
+    // ----------------------------------------------------------
+
+    final nestedCandidates = [
+      result['data'],
+      result['vouchers'],
+      result['availableVoucherList'],
+      result['availableVoucher'],
+      result['result'],
+    ];
+
+    for (final value in nestedCandidates) {
+      if (value is List) {
+        return value.length;
+      }
+
+      if (value is Map) {
+        final nestedMap = Map<String, dynamic>.from(value);
+
+        for (final key in possibleKeys) {
+          if (nestedMap.containsKey(key)) {
+            final nestedValue = nestedMap[key];
+
+            final parsed = int.tryParse(
+              '$nestedValue'.trim(),
+            );
+
+            if (parsed != null) {
+              return parsed;
+            }
+
+            if (nestedValue is List) {
+              return nestedValue.length;
+            }
+          }
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  // ==========================================================
+  // ADD MANUAL PIN
+  // ==========================================================
 
   Future<void> addManualPin() async {
     final pin = pinController.text.trim();
@@ -2584,6 +2742,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage> {
       showMessage(
         'Voucher PIN added successfully.',
       );
+
+      // Refresh available count
+      await loadAvailableVoucherCount();
     } catch (e) {
       if (!mounted) return;
 
@@ -2602,6 +2763,10 @@ class _VoucherUploadPageState extends State<VoucherUploadPage> {
     }
   }
 
+  // ==========================================================
+  // MESSAGE
+  // ==========================================================
+
   void showMessage(
     String message,
   ) {
@@ -2616,6 +2781,10 @@ class _VoucherUploadPageState extends State<VoucherUploadPage> {
     );
   }
 
+  // ==========================================================
+  // BUILD
+  // ==========================================================
+
   @override
   Widget build(
     BuildContext context,
@@ -2628,98 +2797,207 @@ class _VoucherUploadPageState extends State<VoucherUploadPage> {
           icon: Icons.add_card,
         ),
         Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Card(
-                  elevation: 0,
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      children: [
-                        const Icon(
-                          Icons.confirmation_number,
-                          size: 65,
-                          color: Color(0xFF087F5B),
-                        ),
-                        const SizedBox(
-                          height: 15,
-                        ),
-                        const Text(
-                          'MANUAL PIN',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 8,
-                        ),
-                        const Text(
-                          'Enter exactly 12 digits.',
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(
-                          height: 20,
-                        ),
-                        TextField(
-                          controller: pinController,
-                          keyboardType: TextInputType.number,
-                          maxLength: 12,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
-                          ],
-                          decoration: const InputDecoration(
-                            labelText: 'Voucher PIN',
-                            hintText: '652587421023',
-                            prefixIcon: Icon(
-                              Icons.password,
+          child: RefreshIndicator(
+            onRefresh: loadAvailableVoucherCount,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  // ==================================================
+                  // AVAILABLE VOUCHER COUNT
+                  // ==================================================
+
+                  Card(
+                    elevation: 0,
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 55,
+                            height: 55,
+                            decoration: BoxDecoration(
+                              color: const Color(
+                                0xFFE8F5E9,
+                              ),
+                              borderRadius: BorderRadius.circular(
+                                15,
+                              ),
                             ),
-                            counterText: '',
+                            child: const Icon(
+                              Icons.confirmation_number,
+                              color: Color(
+                                0xFF087F5B,
+                              ),
+                              size: 32,
+                            ),
                           ),
-                        ),
-                        const SizedBox(
-                          height: 15,
-                        ),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 52,
-                          child: FilledButton.icon(
-                            onPressed: loading ? null : addManualPin,
+                          const SizedBox(
+                            width: 15,
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'AVAILABLE VOUCHER',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(
+                                  height: 4,
+                                ),
+                                loadingAvailable
+                                    ? const SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                        ),
+                                      )
+                                    : Text(
+                                        '$availableVoucherCount',
+                                        style: const TextStyle(
+                                          fontSize: 28,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(
+                                            0xFF087F5B,
+                                          ),
+                                        ),
+                                      ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Refresh Available Voucher',
+                            onPressed: loadingAvailable
+                                ? null
+                                : loadAvailableVoucherCount,
                             icon: const Icon(
-                              Icons.add,
-                            ),
-                            label: const Text(
-                              'ADD PIN',
+                              Icons.refresh,
                             ),
                           ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(
+                    height: 20,
+                  ),
+
+                  // ==================================================
+                  // MANUAL PIN
+                  // ==================================================
+
+                  Card(
+                    elevation: 0,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        children: [
+                          const Icon(
+                            Icons.confirmation_number,
+                            size: 65,
+                            color: Color(0xFF087F5B),
+                          ),
+                          const SizedBox(
+                            height: 15,
+                          ),
+                          const Text(
+                            'MANUAL PIN',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(
+                            height: 8,
+                          ),
+                          const Text(
+                            'Enter exactly 12 digits.',
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(
+                            height: 20,
+                          ),
+                          TextField(
+                            controller: pinController,
+                            keyboardType: TextInputType.number,
+                            maxLength: 12,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            decoration: const InputDecoration(
+                              labelText: 'Voucher PIN',
+                              hintText: '652587421023',
+                              prefixIcon: Icon(
+                                Icons.password,
+                              ),
+                              counterText: '',
+                            ),
+                          ),
+                          const SizedBox(
+                            height: 15,
+                          ),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 52,
+                            child: FilledButton.icon(
+                              onPressed: loading ? null : addManualPin,
+                              icon: const Icon(
+                                Icons.add,
+                              ),
+                              label: loading
+                                  ? const SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Text(
+                                      'ADD PIN',
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(
+                    height: 20,
+                  ),
+
+                  // ==================================================
+                  // PDF / OCR
+                  // ==================================================
+
+                  Card(
+                    elevation: 0,
+                    child: const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: ListTile(
+                        leading: Icon(
+                          Icons.picture_as_pdf,
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(
-                  height: 20,
-                ),
-                Card(
-                  elevation: 0,
-                  child: const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: ListTile(
-                      leading: Icon(
-                        Icons.picture_as_pdf,
-                      ),
-                      title: Text(
-                        'PDF / OCR',
-                      ),
-                      subtitle: Text(
-                        'PDF OCR will be added after the real voucher sample is provided.',
+                        title: Text(
+                          'PDF / OCR',
+                        ),
+                        subtitle: Text(
+                          'PDF OCR will be added after the real voucher sample is provided.',
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
