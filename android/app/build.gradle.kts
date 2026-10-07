@@ -5,7 +5,6 @@ plugins {
 
 android {
     namespace = "com.example.wifi_voucher"
-
     compileSdk = 36
 
     ndkVersion = flutter.ndkVersion
@@ -17,10 +16,8 @@ android {
 
     defaultConfig {
         applicationId = "com.example.wifi_voucher"
-
         minSdk = flutter.minSdkVersion
         targetSdk = 36
-
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
