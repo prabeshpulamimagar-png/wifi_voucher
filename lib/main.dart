@@ -1,17 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:printing/printing.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
 import 'package:shared_preferences/shared_preferences.dart';
+
+// LAN प्रिन्टरका लागि थप गरिएको इम्पोर्टहरू
+import 'package:esc_pos_printer_plus/esc_pos_printer_plus.dart';
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 
 void main() {
   runApp(const WifiVoucherApp());
@@ -484,21 +481,6 @@ class VoucherRecord {
       ),
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'date': date,
-      'time': time,
-      'empCode': empCode,
-      'name': name,
-      'company': company,
-      'mobile': mobile,
-      'room': room,
-      'pin': pin,
-      'status': status,
-      'issuedBy': issuedBy,
-    };
-  }
 }
 
 // ============================================================
@@ -511,156 +493,6 @@ class ApiService {
   static const String employeeMasterCacheKey = 'wifi_employee_master_cache';
 
   static const String employeeMasterVersionKey = 'wifi_employee_master_version';
-
-  // ==========================================================
-  // HISTORY LOCAL CACHE
-  // ==========================================================
-
-  static const String historyCacheKey = 'wifi_voucher_history_cache_v1';
-
-  String _historyRecordKey(
-    VoucherRecord record,
-  ) {
-    final pin = record.pin.trim();
-
-    if (pin.isNotEmpty) {
-      return 'PIN:$pin';
-    }
-
-    return '${record.date}|${record.time}|'
-        '${record.empCode.trim().toUpperCase()}|'
-        '${record.name.trim().toUpperCase()}|'
-        '${record.room.trim().toUpperCase()}';
-  }
-
-  bool _isUsedHistoryRecord(
-    VoucherRecord record,
-  ) {
-    final status = record.status.trim().toUpperCase();
-
-    return status.isEmpty || status == 'USED';
-  }
-
-  void _sortHistory(
-    List<VoucherRecord> records,
-  ) {
-    records.sort(
-      (a, b) {
-        return parseVoucherDateTime(
-          b.date,
-          b.time,
-        ).compareTo(
-          parseVoucherDateTime(
-            a.date,
-            a.time,
-          ),
-        );
-      },
-    );
-  }
-
-  Future<List<VoucherRecord>> getCachedHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final value = prefs.getString(
-      historyCacheKey,
-    );
-
-    if (value == null || value.trim().isEmpty) {
-      return [];
-    }
-
-    try {
-      final decoded = jsonDecode(value);
-
-      if (decoded is! List) {
-        return [];
-      }
-
-      final records = <VoucherRecord>[];
-
-      for (final item in decoded) {
-        if (item is Map) {
-          try {
-            final record = VoucherRecord.fromJson(
-              Map<String, dynamic>.from(item),
-            );
-
-            if (record.pin.isNotEmpty ||
-                record.empCode.isNotEmpty ||
-                record.name.isNotEmpty) {
-              records.add(record);
-            }
-          } catch (e) {
-            debugPrint(
-              'HISTORY CACHE ITEM ERROR: $e',
-            );
-          }
-        }
-      }
-
-      _sortHistory(records);
-
-      return records;
-    } catch (e) {
-      debugPrint(
-        'HISTORY CACHE READ ERROR: $e',
-      );
-
-      return [];
-    }
-  }
-
-  Future<List<VoucherRecord>> mergeHistoryCache(
-    List<VoucherRecord> newRecords,
-  ) async {
-    final existing = await getCachedHistory();
-
-    final Map<String, VoucherRecord> merged = {};
-
-    for (final record in existing) {
-      if (_isUsedHistoryRecord(record)) {
-        merged[_historyRecordKey(record)] = record;
-      }
-    }
-
-    for (final record in newRecords) {
-      if (_isUsedHistoryRecord(record)) {
-        merged[_historyRecordKey(record)] = record;
-      }
-    }
-
-    final result = merged.values.toList();
-
-    _sortHistory(result);
-
-    final prefs = await SharedPreferences.getInstance();
-
-    await prefs.setString(
-      historyCacheKey,
-      jsonEncode(
-        result.map((e) => e.toJson()).toList(),
-      ),
-    );
-
-    debugPrint(
-      'HISTORY CACHE SAVED: ${result.length} records',
-    );
-
-    return result;
-  }
-
-  Future<void> saveHistoryRecordToCache(
-    VoucherRecord record,
-  ) async {
-    await mergeHistoryCache([
-      record,
-    ]);
-  }
-
-  // ==========================================================
-  // API POST
-  // ==========================================================
 
   Future<Map<String, dynamic>> post(
     Map<String, dynamic> data,
@@ -707,10 +539,6 @@ class ApiService {
         'POST LOCATION: ${response.headers['location']}',
       );
 
-      debugPrint(
-        'POST BODY: ${response.body}',
-      );
-
       final body = response.body.trim();
 
       if (body.isNotEmpty &&
@@ -744,10 +572,6 @@ class ApiService {
 
           debugPrint(
             'REDIRECT STATUS: ${redirectResponse.statusCode}',
-          );
-
-          debugPrint(
-            'REDIRECT BODY: $redirectBody',
           );
 
           if (redirectBody.isNotEmpty) {
@@ -844,10 +668,6 @@ class ApiService {
     }
   }
 
-  // ==========================================================
-  // GET FALLBACK
-  // ==========================================================
-
   Future<Map<String, dynamic>> getFallback(
     Map<String, dynamic> data,
   ) async {
@@ -882,10 +702,6 @@ class ApiService {
       'GET FALLBACK STATUS: ${response.statusCode}',
     );
 
-    debugPrint(
-      'GET FALLBACK BODY: $body',
-    );
-
     if (body.isEmpty) {
       throw Exception(
         'Empty server response.',
@@ -894,10 +710,6 @@ class ApiService {
 
     return decodeResponse(body);
   }
-
-  // ==========================================================
-  // RAW GET
-  // ==========================================================
 
   Future<dynamic> getRaw(
     Map<String, dynamic> data,
@@ -951,10 +763,6 @@ class ApiService {
         '${response.headers['location']}',
       );
 
-      debugPrint(
-        'RAW GET BODY: ${response.body}',
-      );
-
       String body = response.body.trim();
 
       final location = response.headers['location'];
@@ -980,11 +788,6 @@ class ApiService {
         debugPrint(
           'RAW REDIRECT STATUS: '
           '${redirectResponse.statusCode}',
-        );
-
-        debugPrint(
-          'RAW REDIRECT BODY: '
-          '${redirectResponse.body}',
         );
 
         body = redirectResponse.body.trim();
@@ -1015,10 +818,6 @@ class ApiService {
       client.close();
     }
   }
-
-  // ==========================================================
-  // DIRECT GET
-  // ==========================================================
 
   Future<Map<String, dynamic>> get(
     Map<String, dynamic> data,
@@ -1073,11 +872,6 @@ class ApiService {
           '${response.headers['location']}',
         );
 
-        debugPrint(
-          'GET BODY: '
-          '${response.body}',
-        );
-
         String body = response.body.trim();
 
         final location = response.headers['location'];
@@ -1115,10 +909,6 @@ class ApiService {
       rethrow;
     }
   }
-
-  // ==========================================================
-  // DECODE
-  // ==========================================================
 
   Map<String, dynamic> decodeResponse(
     String body,
@@ -1160,10 +950,6 @@ class ApiService {
     return result;
   }
 
-  // ==========================================================
-  // LOGIN
-  // ==========================================================
-
   Future<String> login({
     required String username,
     required String password,
@@ -1201,10 +987,6 @@ class ApiService {
     return serverUsername;
   }
 
-  // ==========================================================
-  // EMPLOYEE CACHE
-  // ==========================================================
-
   Future<void> saveEmployeeCache(
     Employee employee,
   ) async {
@@ -1240,7 +1022,9 @@ class ApiService {
 
       if (decoded is Map) {
         return Employee.fromJson(
-          Map<String, dynamic>.from(decoded),
+          Map<String, dynamic>.from(
+            decoded,
+          ),
         );
       }
     } catch (e) {
@@ -1281,7 +1065,9 @@ class ApiService {
     );
 
     for (final employee in employees) {
-      await saveEmployeeCache(employee);
+      await saveEmployeeCache(
+        employee,
+      );
     }
 
     debugPrint(
@@ -1315,7 +1101,9 @@ class ApiService {
           (key, value) {
             if (value is Map) {
               final employee = Employee.fromJson(
-                Map<String, dynamic>.from(value),
+                Map<String, dynamic>.from(
+                  value,
+                ),
               );
 
               final code = employee.empCode.trim().toUpperCase();
@@ -1372,7 +1160,9 @@ class ApiService {
         .whereType<Map>()
         .map(
           (e) => Employee.fromJson(
-            Map<String, dynamic>.from(e),
+            Map<String, dynamic>.from(
+              e,
+            ),
           ),
         )
         .toList();
@@ -1451,7 +1241,9 @@ class ApiService {
       );
     }
 
-    final masterCached = await getEmployeeFromMasterCache(code);
+    final masterCached = await getEmployeeFromMasterCache(
+      code,
+    );
 
     if (masterCached != null) {
       debugPrint(
@@ -1461,7 +1253,9 @@ class ApiService {
       return masterCached;
     }
 
-    final individualCached = await getCachedEmployee(code);
+    final individualCached = await getCachedEmployee(
+      code,
+    );
 
     if (individualCached != null) {
       debugPrint(
@@ -1499,7 +1293,9 @@ class ApiService {
         ),
       );
 
-      await saveEmployeeCache(employee);
+      await saveEmployeeCache(
+        employee,
+      );
 
       return employee;
     } catch (e) {
@@ -1510,10 +1306,6 @@ class ApiService {
       rethrow;
     }
   }
-
-  // ==========================================================
-  // ADD VOUCHER
-  // ==========================================================
 
   Future<void> addVoucher(
     String pin,
@@ -1528,10 +1320,6 @@ class ApiService {
     );
   }
 
-  // ==========================================================
-  // ISSUE VOUCHER
-  // ==========================================================
-
   Future<VoucherRecord> issueVoucher({
     required String empCode,
     required String name,
@@ -1540,34 +1328,6 @@ class ApiService {
     required String room,
     required String issuedBy,
   }) async {
-    debugPrint(
-      '========================================',
-    );
-
-    debugPrint(
-      'ISSUE VOUCHER START',
-    );
-
-    debugPrint(
-      'EMP CODE: $empCode',
-    );
-
-    debugPrint(
-      'NAME: $name',
-    );
-
-    debugPrint(
-      'ROOM: $room',
-    );
-
-    debugPrint(
-      'ISSUED BY: $issuedBy',
-    );
-
-    debugPrint(
-      '========================================',
-    );
-
     final result = await post(
       {
         'action': 'issueVoucher',
@@ -1578,10 +1338,6 @@ class ApiService {
         'room': room,
         'issuedBy': issuedBy,
       },
-    );
-
-    debugPrint(
-      'ISSUE VOUCHER RESPONSE: $result',
     );
 
     final voucherData = result['voucher'];
@@ -1610,55 +1366,35 @@ class ApiService {
       );
     }
 
-    debugPrint(
-      'VOUCHER SUCCESS: ${voucher.pin}',
-    );
-
     return voucher;
   }
 
   // ==========================================================
   // HISTORY
+  // IMPORTANT:
+  // NEWEST DATE + TIME FIRST
   // ==========================================================
 
   Future<List<VoucherRecord>> getHistory({
     required String fromDate,
     required String toDate,
+    String empCode = '',
   }) async {
-    debugPrint(
-      '========================================',
-    );
-
-    debugPrint(
-      'GET HISTORY START',
-    );
-
-    debugPrint(
-      'FROM DATE: $fromDate',
-    );
-
-    debugPrint(
-      'TO DATE: $toDate',
-    );
-
-    debugPrint(
-      '========================================',
-    );
-
+    // Send the employee filter to Apps Script so the app does not
+    // download and filter the whole month's history on the client.
     final rawResponse = await getRaw(
       {
         'action': 'getHistory',
         'fromDate': fromDate,
         'toDate': toDate,
+        'empCode': empCode.trim().toUpperCase(),
       },
     );
 
-    debugPrint(
-      'RAW HISTORY RESPONSE: $rawResponse',
-    );
-
     if (rawResponse is Map) {
-      final serverMap = Map<String, dynamic>.from(rawResponse);
+      final serverMap = Map<String, dynamic>.from(
+        rawResponse,
+      );
 
       if (serverMap.containsKey('success') && serverMap['success'] == false) {
         throw Exception(
@@ -1668,10 +1404,6 @@ class ApiService {
     }
 
     dynamic rawHistory = _extractHistory(rawResponse);
-
-    debugPrint(
-      'EXTRACTED HISTORY: $rawHistory',
-    );
 
     if (rawHistory == null) {
       debugPrint(
@@ -1703,7 +1435,9 @@ class ApiService {
       if (item is Map) {
         try {
           final record = VoucherRecord.fromJson(
-            Map<String, dynamic>.from(item),
+            Map<String, dynamic>.from(
+              item,
+            ),
           );
 
           if (record.pin.isNotEmpty ||
@@ -1719,10 +1453,35 @@ class ApiService {
       }
     }
 
-    _sortHistory(records);
+    // ========================================================
+    // IMPORTANT:
+    // SORT BY REAL DATE + TIME
+    // NEWEST FIRST
+    //
+    // Voucher/PIN number is NOT used for sorting.
+    // ========================================================
+
+    records.sort(
+      (a, b) {
+        final aDateTime = parseVoucherDateTime(
+          a.date,
+          a.time,
+        );
+
+        final bDateTime = parseVoucherDateTime(
+          b.date,
+          b.time,
+        );
+
+        return bDateTime.compareTo(
+          aDateTime,
+        );
+      },
+    );
 
     debugPrint(
-      'HISTORY RECORD COUNT: ${records.length}',
+      'HISTORY RECORD COUNT: '
+      '${records.length}',
     );
 
     if (records.isNotEmpty) {
@@ -1732,18 +1491,6 @@ class ApiService {
         '${records.first.time} '
         '${records.first.empCode} '
         '${records.first.pin}',
-      );
-    }
-
-    // ========================================================
-    // SAVE SERVER HISTORY INTO LOCAL CACHE
-    // ========================================================
-
-    try {
-      await mergeHistoryCache(records);
-    } catch (e) {
-      debugPrint(
-        'HISTORY CACHE SAVE ERROR: $e',
       );
     }
 
@@ -1771,7 +1518,9 @@ class ApiService {
       try {
         final decoded = jsonDecode(text);
 
-        return _extractHistory(decoded);
+        return _extractHistory(
+          decoded,
+        );
       } catch (_) {
         return null;
       }
@@ -1832,7 +1581,9 @@ class ApiService {
             key == 'results' ||
             key == 'data' ||
             key == 'list') {
-          final nested = _extractHistory(entry.value);
+          final nested = _extractHistory(
+            entry.value,
+          );
 
           if (nested != null) {
             return nested;
@@ -1844,7 +1595,9 @@ class ApiService {
         if (entry.value is Map ||
             entry.value is List ||
             entry.value is String) {
-          final nested = _extractHistory(entry.value);
+          final nested = _extractHistory(
+            entry.value,
+          );
 
           if (nested != null) {
             return nested;
@@ -1892,10 +1645,6 @@ class ApiService {
 
     return pin.isNotEmpty || empCode.isNotEmpty || date.isNotEmpty;
   }
-
-  // ==========================================================
-  // GET VOUCHER
-  // ==========================================================
 
   Future<VoucherRecord> getVoucher({
     required String date,
@@ -1951,7 +1700,9 @@ String calculateValidUntil(
 
     if (parts.length == 3) {
       final day = int.parse(parts[0]);
+
       final month = int.parse(parts[1]);
+
       final year = int.parse(parts[2]);
 
       final issueDate = DateTime(
@@ -1961,7 +1712,9 @@ String calculateValidUntil(
       );
 
       final validDate = issueDate.add(
-        const Duration(days: 30),
+        const Duration(
+          days: 30,
+        ),
       );
 
       return '${validDate.day.toString().padLeft(2, '0')}-'
@@ -1978,7 +1731,9 @@ String calculateValidUntil(
 // ============================================================
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+  const LoginPage({
+    super.key,
+  });
 
   @override
   State<LoginPage> createState() => _LoginPageState();
@@ -1990,6 +1745,7 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController passwordController = TextEditingController();
 
   bool loading = false;
+
   bool obscurePassword = true;
 
   @override
@@ -2005,12 +1761,16 @@ class _LoginPageState extends State<LoginPage> {
     final password = passwordController.text;
 
     if (username.isEmpty) {
-      showMessage('Enter User Name.');
+      showMessage(
+        'Enter User Name.',
+      );
       return;
     }
 
     if (password.isEmpty) {
-      showMessage('Enter Password.');
+      showMessage(
+        'Enter Password.',
+      );
       return;
     }
 
@@ -2052,10 +1812,14 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  void showMessage(String message) {
+  void showMessage(
+    String message,
+  ) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(
       SnackBar(
         content: Text(message),
       ),
@@ -2063,7 +1827,9 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -2079,8 +1845,12 @@ class _LoginPageState extends State<LoginPage> {
                     width: 80,
                     height: 80,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF087F5B),
-                      borderRadius: BorderRadius.circular(22),
+                      color: const Color(
+                        0xFF087F5B,
+                      ),
+                      borderRadius: BorderRadius.circular(
+                        22,
+                      ),
                     ),
                     child: const Icon(
                       Icons.wifi,
@@ -2088,7 +1858,9 @@ class _LoginPageState extends State<LoginPage> {
                       size: 45,
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(
+                    height: 20,
+                  ),
                   const Text(
                     'WIFI VOUCHER',
                     style: TextStyle(
@@ -2096,18 +1868,24 @@ class _LoginPageState extends State<LoginPage> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(
+                    height: 6,
+                  ),
                   const Text(
                     'Login to continue',
                     style: TextStyle(
                       color: Colors.grey,
                     ),
                   ),
-                  const SizedBox(height: 30),
+                  const SizedBox(
+                    height: 30,
+                  ),
                   Card(
                     elevation: 0,
                     child: Padding(
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.all(
+                        20,
+                      ),
                       child: Column(
                         children: [
                           TextField(
@@ -2115,7 +1893,9 @@ class _LoginPageState extends State<LoginPage> {
                             textCapitalization: TextCapitalization.none,
                             decoration: const InputDecoration(
                               labelText: 'User Name',
-                              prefixIcon: Icon(Icons.person),
+                              prefixIcon: Icon(
+                                Icons.person,
+                              ),
                             ),
                             onSubmitted: (_) {
                               if (!loading) {
@@ -2123,18 +1903,24 @@ class _LoginPageState extends State<LoginPage> {
                               }
                             },
                           ),
-                          const SizedBox(height: 15),
+                          const SizedBox(
+                            height: 15,
+                          ),
                           TextField(
                             controller: passwordController,
                             obscureText: obscurePassword,
                             decoration: InputDecoration(
                               labelText: 'Password',
-                              prefixIcon: const Icon(Icons.lock),
+                              prefixIcon: const Icon(
+                                Icons.lock,
+                              ),
                               suffixIcon: IconButton(
                                 onPressed: () {
-                                  setState(() {
-                                    obscurePassword = !obscurePassword;
-                                  });
+                                  setState(
+                                    () {
+                                      obscurePassword = !obscurePassword;
+                                    },
+                                  );
                                 },
                                 icon: Icon(
                                   obscurePassword
@@ -2149,7 +1935,9 @@ class _LoginPageState extends State<LoginPage> {
                               }
                             },
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(
+                            height: 20,
+                          ),
                           SizedBox(
                             width: double.infinity,
                             height: 52,
@@ -2208,9 +1996,12 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int currentIndex = 0;
 
-  late final List<Widget> pages;
+  // Create the first page immediately. Other tabs are created only
+  // when the user opens them, avoiding unnecessary startup API calls.
+  late final List<Widget?> pages;
 
   Timer? employeeSyncTimer;
+  Timer? initialSyncTimer;
 
   bool syncingEmployeeCache = false;
 
@@ -2224,20 +2015,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       IssueVoucherPage(
         loggedUser: widget.loggedUser,
       ),
-      VoucherUploadPage(
-        loggedUser: widget.loggedUser,
-      ),
-      const HistoryPage(),
+      null,
+      null,
     ];
 
-    syncEmployeeCache();
+    // Let the home screen render before background network sync starts.
+    initialSyncTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
 
-    employeeSyncTimer = Timer.periodic(
-      const Duration(minutes: 2),
-      (_) {
-        syncEmployeeCache();
-      },
-    );
+      syncEmployeeCache();
+
+      employeeSyncTimer = Timer.periodic(
+        const Duration(minutes: 2),
+        (_) {
+          syncEmployeeCache();
+        },
+      );
+    });
+  }
+
+  Widget _createPage(int index) {
+    switch (index) {
+      case 0:
+        return IssueVoucherPage(loggedUser: widget.loggedUser);
+      case 1:
+        return VoucherUploadPage(loggedUser: widget.loggedUser);
+      case 2:
+        return const HistoryPage();
+      default:
+        return const SizedBox.shrink();
+    }
   }
 
   Future<void> syncEmployeeCache() async {
@@ -2250,18 +2057,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     try {
       await api.syncEmployeesIfNeeded();
     } catch (e) {
-      debugPrint(
-        'BACKGROUND EMPLOYEE SYNC ERROR: $e',
-      );
+      debugPrint('BACKGROUND EMPLOYEE SYNC ERROR: $e');
     } finally {
       syncingEmployeeCache = false;
     }
   }
 
   @override
-  void didChangeAppLifecycleState(
-    AppLifecycleState state,
-  ) {
+  void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       syncEmployeeCache();
     }
@@ -2269,10 +2072,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    initialSyncTimer?.cancel();
     employeeSyncTimer?.cancel();
-
     WidgetsBinding.instance.removeObserver(this);
-
     super.dispose();
   }
 
@@ -2282,7 +2084,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       body: SafeArea(
         child: IndexedStack(
           index: currentIndex,
-          children: pages,
+          children: pages
+              .map<Widget>((page) => page ?? const SizedBox.shrink())
+              .toList(growable: false),
         ),
       ),
       bottomNavigationBar: NavigationBar(
@@ -2290,6 +2094,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         onDestinationSelected: (index) {
           setState(() {
             currentIndex = index;
+            pages[index] ??= _createPage(index);
           });
         },
         destinations: const [
@@ -2352,7 +2157,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
     final code = empController.text.trim();
 
     if (code.isEmpty) {
-      showMessage('Enter Emp Code.');
+      showMessage(
+        'Enter Emp Code.',
+      );
       return;
     }
 
@@ -2364,7 +2171,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
     });
 
     try {
-      final result = await api.getEmployee(code);
+      final result = await api.getEmployee(
+        code,
+      );
 
       if (!mounted) return;
 
@@ -2391,31 +2200,6 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
         });
       }
     }
-  }
-
-  Future<void> scanQr() async {
-    FocusScope.of(context).unfocus();
-
-    final result = await Navigator.push<String>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const QrScannerPage(),
-      ),
-    );
-
-    if (result == null || result.trim().isEmpty) {
-      return;
-    }
-
-    final code = result.trim();
-
-    if (empController.text.trim() == code) {
-      return;
-    }
-
-    empController.text = code;
-
-    await searchEmployee();
   }
 
   Future<void> submitVoucher() async {
@@ -2475,7 +2259,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
               Text(
                 'Room No.: $finalRoom',
               ),
-              const SizedBox(height: 12),
+              const SizedBox(
+                height: 12,
+              ),
               const Text(
                 'Voucher will be issued only after you press SUBMIT.',
               ),
@@ -2527,21 +2313,6 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
         issuedBy: widget.loggedUser,
       );
 
-      // ======================================================
-      // NEW:
-      // SAVE NEWLY ISSUED VOUCHER TO LOCAL HISTORY CACHE
-      // ======================================================
-
-      try {
-        await api.saveHistoryRecordToCache(
-          voucher,
-        );
-      } catch (cacheError) {
-        debugPrint(
-          'NEW VOUCHER CACHE ERROR: $cacheError',
-        );
-      }
-
       if (!mounted) return;
 
       await Navigator.push(
@@ -2583,10 +2354,14 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
     });
   }
 
-  void showMessage(String message) {
+  void showMessage(
+    String message,
+  ) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(
       SnackBar(
         content: Text(message),
       ),
@@ -2594,7 +2369,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Column(
       children: [
         appHeader(
@@ -2608,19 +2385,6 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: loading ? null : scanQr,
-                    icon: const Icon(
-                      Icons.qr_code_scanner,
-                    ),
-                    label: const Text(
-                      'QR SCAN',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
                 TextField(
                   controller: empController,
                   textCapitalization: TextCapitalization.characters,
@@ -2636,7 +2400,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                     }
                   },
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(
+                  height: 12,
+                ),
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
@@ -2649,14 +2415,21 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(
+                  height: 20,
+                ),
                 if (loading)
                   const Padding(
-                    padding: EdgeInsets.all(20),
+                    padding: EdgeInsets.all(
+                      20,
+                    ),
                     child: CircularProgressIndicator(),
                   ),
                 if (employee != null) employeeCard(),
-                if (employee != null) const SizedBox(height: 15),
+                if (employee != null)
+                  const SizedBox(
+                    height: 15,
+                  ),
                 if (employee != null)
                   TextField(
                     controller: roomController,
@@ -2671,7 +2444,10 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                       ),
                     ),
                   ),
-                if (employee != null) const SizedBox(height: 12),
+                if (employee != null)
+                  const SizedBox(
+                    height: 12,
+                  ),
                 if (employee != null)
                   TextField(
                     controller: notesController,
@@ -2683,7 +2459,10 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                       ),
                     ),
                   ),
-                if (employee != null) const SizedBox(height: 20),
+                if (employee != null)
+                  const SizedBox(
+                    height: 20,
+                  ),
                 if (employee != null)
                   SizedBox(
                     width: double.infinity,
@@ -2713,7 +2492,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
     return Card(
       elevation: 0,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(
+          16,
+        ),
         child: Column(
           children: [
             const CircleAvatar(
@@ -2723,7 +2504,9 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                 size: 35,
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(
+              height: 10,
+            ),
             Text(
               employee!.name,
               style: const TextStyle(
@@ -2731,16 +2514,24 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 5),
+            const SizedBox(
+              height: 5,
+            ),
             Text(
               employee!.empCode,
               style: const TextStyle(
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 5),
-            Text(employee!.company),
-            const SizedBox(height: 5),
+            const SizedBox(
+              height: 5,
+            ),
+            Text(
+              employee!.company,
+            ),
+            const SizedBox(
+              height: 5,
+            ),
             Text(
               'Mobile: ${employee!.mobile}',
             ),
@@ -2772,7 +2563,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
   final TextEditingController pinController = TextEditingController();
 
   bool loading = false;
+
   bool loadingAvailable = false;
+
   int availableVoucherCount = 0;
 
   @override
@@ -2795,9 +2588,7 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(
-      this,
-    );
+    WidgetsBinding.instance.removeObserver(this);
 
     pinController.dispose();
 
@@ -2826,7 +2617,7 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
         'AVAILABLE VOUCHER RESPONSE: $result',
       );
 
-      final count = extractAvailableVoucherCount(
+      int count = extractAvailableVoucherCount(
         result,
       );
 
@@ -2895,10 +2686,14 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
       }
 
       if (value is Map) {
-        final nestedMap = Map<String, dynamic>.from(value);
+        final nestedMap = Map<String, dynamic>.from(
+          value,
+        );
 
         for (final key in possibleKeys) {
-          if (nestedMap.containsKey(key)) {
+          if (nestedMap.containsKey(
+            key,
+          )) {
             final nestedValue = nestedMap[key];
 
             final parsed = int.tryParse(
@@ -2923,7 +2718,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
   Future<void> addManualPin() async {
     final pin = pinController.text.trim();
 
-    if (!RegExp(r'^\d{12}$').hasMatch(pin)) {
+    if (!RegExp(
+      r'^\d{12}$',
+    ).hasMatch(pin)) {
       showMessage(
         'Voucher PIN must contain exactly 12 digits.',
       );
@@ -2967,10 +2764,14 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
     }
   }
 
-  void showMessage(String message) {
+  void showMessage(
+    String message,
+  ) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(
       SnackBar(
         content: Text(message),
       ),
@@ -2978,7 +2779,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Column(
       children: [
         appHeader(
@@ -2991,13 +2794,17 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
             onRefresh: loadAvailableVoucherCount,
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(
+                16,
+              ),
               child: Column(
                 children: [
                   Card(
                     elevation: 0,
                     child: Padding(
-                      padding: const EdgeInsets.all(18),
+                      padding: const EdgeInsets.all(
+                        18,
+                      ),
                       child: Row(
                         children: [
                           Container(
@@ -3019,7 +2826,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                               size: 32,
                             ),
                           ),
-                          const SizedBox(width: 15),
+                          const SizedBox(
+                            width: 15,
+                          ),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3069,11 +2878,15 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(
+                    height: 20,
+                  ),
                   Card(
                     elevation: 0,
                     child: Padding(
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.all(
+                        20,
+                      ),
                       child: Column(
                         children: [
                           const Icon(
@@ -3083,7 +2896,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                               0xFF087F5B,
                             ),
                           ),
-                          const SizedBox(height: 15),
+                          const SizedBox(
+                            height: 15,
+                          ),
                           const Text(
                             'MANUAL PIN',
                             style: TextStyle(
@@ -3091,12 +2906,16 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(
+                            height: 8,
+                          ),
                           const Text(
                             'Enter exactly 12 digits.',
                             textAlign: TextAlign.center,
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(
+                            height: 20,
+                          ),
                           TextField(
                             controller: pinController,
                             keyboardType: TextInputType.number,
@@ -3113,7 +2932,9 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                               counterText: '',
                             ),
                           ),
-                          const SizedBox(height: 15),
+                          const SizedBox(
+                            height: 15,
+                          ),
                           SizedBox(
                             width: double.infinity,
                             height: 52,
@@ -3140,11 +2961,15 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(
+                    height: 20,
+                  ),
                   Card(
                     elevation: 0,
                     child: const Padding(
-                      padding: EdgeInsets.all(16),
+                      padding: EdgeInsets.all(
+                        16,
+                      ),
                       child: ListTile(
                         leading: Icon(
                           Icons.picture_as_pdf,
@@ -3169,294 +2994,7 @@ class _VoucherUploadPageState extends State<VoucherUploadPage>
 }
 
 // ============================================================
-// QR SCANNER
-// ============================================================
-
-class QrScannerPage extends StatefulWidget {
-  const QrScannerPage({super.key});
-
-  @override
-  State<QrScannerPage> createState() => _QrScannerPageState();
-}
-
-class _QrScannerPageState extends State<QrScannerPage>
-    with WidgetsBindingObserver {
-  late final MobileScannerController scannerController;
-
-  bool scanned = false;
-  bool torchOn = false;
-  bool cameraStarted = false;
-
-  @override
-  void initState() {
-    super.initState();
-
-    WidgetsBinding.instance.addObserver(
-      this,
-    );
-
-    scannerController = MobileScannerController(
-      detectionSpeed: DetectionSpeed.noDuplicates,
-      facing: CameraFacing.back,
-      torchEnabled: false,
-    );
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(
-      this,
-    );
-
-    scannerController.dispose();
-
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(
-    AppLifecycleState state,
-  ) {
-    if (state == AppLifecycleState.resumed) {
-      if (!scanned) {
-        startCamera();
-      }
-    } else if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
-      stopCamera();
-    }
-  }
-
-  Future<void> startCamera() async {
-    if (scanned) {
-      return;
-    }
-
-    try {
-      await scannerController.start();
-
-      if (!mounted) return;
-
-      setState(() {
-        cameraStarted = true;
-      });
-    } catch (e) {
-      debugPrint(
-        'CAMERA START ERROR: $e',
-      );
-    }
-  }
-
-  Future<void> stopCamera() async {
-    try {
-      await scannerController.stop();
-
-      if (!mounted) return;
-
-      setState(() {
-        cameraStarted = false;
-      });
-    } catch (e) {
-      debugPrint(
-        'CAMERA STOP ERROR: $e',
-      );
-    }
-  }
-
-  Future<void> toggleTorch() async {
-    try {
-      await scannerController.toggleTorch();
-
-      if (!mounted) return;
-
-      setState(() {
-        torchOn = !torchOn;
-      });
-    } catch (e) {
-      debugPrint(
-        'TORCH ERROR: $e',
-      );
-    }
-  }
-
-  Future<void> onDetect(
-    BarcodeCapture capture,
-  ) async {
-    if (scanned) {
-      return;
-    }
-
-    for (final barcode in capture.barcodes) {
-      final value = barcode.rawValue;
-
-      if (value != null && value.trim().isNotEmpty) {
-        scanned = true;
-
-        try {
-          await scannerController.stop();
-        } catch (_) {}
-
-        if (!mounted) return;
-
-        Navigator.pop(
-          context,
-          value.trim(),
-        );
-
-        break;
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'SCAN EMPLOYEE QR',
-        ),
-        actions: [
-          IconButton(
-            tooltip: torchOn ? 'Turn Flash Off' : 'Turn Flash On',
-            onPressed: toggleTorch,
-            icon: Icon(
-              torchOn ? Icons.flash_on : Icons.flash_off,
-            ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                12,
-                12,
-                12,
-                0,
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 220,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      MobileScanner(
-                        controller: scannerController,
-                        onDetect: onDetect,
-                        onDetectError: (
-                          error,
-                          stackTrace,
-                        ) {
-                          debugPrint(
-                            'QR CAMERA ERROR: $error',
-                          );
-                        },
-                      ),
-                      Center(
-                        child: Container(
-                          width: 170,
-                          height: 170,
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: Colors.white,
-                              width: 3,
-                            ),
-                            borderRadius: BorderRadius.circular(
-                              12,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 10,
-                        right: 10,
-                        child: Material(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(
-                            30,
-                          ),
-                          child: IconButton(
-                            tooltip: torchOn ? 'Flash Off' : 'Flash On',
-                            onPressed: toggleTorch,
-                            icon: Icon(
-                              torchOn ? Icons.flash_on : Icons.flash_off,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Place employee QR inside the frame',
-              style: TextStyle(
-                color: Colors.grey,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(
-                  16,
-                  8,
-                  16,
-                  30,
-                ),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 10),
-                    const Icon(
-                      Icons.qr_code_scanner,
-                      size: 65,
-                      color: Color(
-                        0xFF087F5B,
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    const Text(
-                      'Scan Employee QR Code',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Keep the QR code inside the camera frame.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'The camera remains active while this scanner is open.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ============================================================
-// VOUCHER RESULT PAGE
+// VOUCHER RESULT PAGE (LAN PRINTER FIX)
 // ============================================================
 
 class VoucherResultPage extends StatelessWidget {
@@ -3467,111 +3005,111 @@ class VoucherResultPage extends StatelessWidget {
     required this.voucher,
   });
 
-  Future<Uint8List> createPrintPdf() async {
-    final document = pw.Document();
+  // ============================================================
+  // LAN THERMAL PRINTER
+  // ============================================================
+  Future<void> printVoucher(BuildContext context) async {
+    const String printerIp = '10.20.6.221';
+    const int printerPort = 9100;
 
-    document.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.roll80,
-        build: (context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.center,
-            children: [
-              pw.Text(
-                'WIFI VOUCHER',
-                style: pw.TextStyle(
-                  fontSize: 18,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                voucher.pin,
-                style: pw.TextStyle(
-                  fontSize: 22,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              pw.SizedBox(height: 10),
-              pw.BarcodeWidget(
-                barcode: pw.Barcode.qrCode(),
-                data: voucher.pin,
-                width: 130,
-                height: 130,
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                'Emp Code: ${voucher.empCode}',
-              ),
-              pw.Text(
-                'Name: ${voucher.name}',
-              ),
-              pw.Text(
-                'Company: ${voucher.company}',
-              ),
-              pw.Text(
-                'Mobile No: ${voucher.mobile}',
-              ),
-              pw.Text(
-                'Room No: ${voucher.room}',
-              ),
-              pw.Text(
-                'Date: ${voucher.date}',
-              ),
-              pw.Text(
-                'Time: ${voucher.time}',
-              ),
-              pw.SizedBox(height: 8),
-              pw.Text(
-                'Issued By: ${voucher.issuedBy}',
-                style: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              pw.SizedBox(height: 8),
-              pw.Text(
-                'Valid Until: '
-                '${calculateValidUntil(voucher.date)}',
-                style: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-            ],
+    NetworkPrinter? printer;
+    bool connected = false;
+
+    void showMessage(String message) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text(message)),
           );
-        },
-      ),
-    );
+      }
+    }
 
-    return document.save();
-  }
-
-  Future<void> printVoucher(
-    BuildContext context,
-  ) async {
     try {
-      await Printing.layoutPdf(
-        onLayout: (format) async {
-          return createPrintPdf();
-        },
+      showMessage('प्रिन्टरसँग जोडिँदै छ...');
+
+      const PaperSize paper = PaperSize.mm80;
+      final profile = await CapabilityProfile.load();
+      printer = NetworkPrinter(paper, profile);
+
+      final PosPrintResult result = await printer
+          .connect(printerIp, port: printerPort)
+          .timeout(const Duration(seconds: 10));
+
+      if (result != PosPrintResult.success) {
+        showMessage(
+          'प्रिन्टरमा जडान भएन: ${result.msg}',
+        );
+        return;
+      }
+
+      connected = true;
+
+      // Voucher heading
+      printer.text(
+        'WIFI VOUCHER',
+        styles: const PosStyles(
+          align: PosAlign.center,
+          bold: true,
+          height: PosTextSize.size2,
+          width: PosTextSize.size2,
+        ),
+      );
+
+      printer.feed(1);
+
+      // Voucher PIN
+      printer.text(
+        'PIN: ${voucher.pin}',
+        styles: const PosStyles(
+          align: PosAlign.center,
+          bold: true,
+          height: PosTextSize.size2,
+          width: PosTextSize.size2,
+        ),
+      );
+
+      printer.feed(1);
+
+      // Voucher details
+      printer.text('Emp Code: ${voucher.empCode}');
+      printer.text('Name: ${voucher.name}');
+      printer.text('Company: ${voucher.company}');
+      printer.text('Mobile No: ${voucher.mobile}');
+      printer.text('Room No: ${voucher.room}');
+      printer.text('Date: ${voucher.date}');
+      printer.text('Time: ${voucher.time}');
+      printer.text('Issued By: ${voucher.issuedBy}');
+      printer.text(
+        'Valid Until: ${calculateValidUntil(voucher.date)}',
+      );
+
+      printer.feed(3);
+      printer.cut();
+
+      // Allow time for queued print data to be sent.
+      await Future.delayed(const Duration(milliseconds: 1000));
+
+      showMessage(
+        'प्रिन्ट डेटा पठाइयो। कागज निस्कियो कि जाँच गर्नुहोस्।',
       );
     } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Print error: $e',
-            ),
-          ),
-        );
+      showMessage('Print error: $e');
+    } finally {
+      if (connected && printer != null) {
+        try {
+          printer.disconnect();
+        } catch (_) {
+          // Ignore disconnect errors.
+        }
       }
     }
   }
 
-  Future<void> shareVoucher(
-    BuildContext context,
-  ) async {
+  // ============================================================
+  // WHATSAPP / SHARE
+  // ============================================================
+  Future<void> shareVoucher(BuildContext context) async {
     final text = '''
 WIFI VOUCHER
 
@@ -3594,24 +3132,20 @@ Valid Until: ${calculateValidUntil(voucher.date)}
     await Share.share(text);
   }
 
+  // ============================================================
+  // UI — KEPT AS BEFORE
+  // ============================================================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'VOUCHER',
-        ),
+        title: const Text('VOUCHER'),
       ),
       body: SafeArea(
         bottom: true,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(
-            16,
-            16,
-            16,
-            40,
-          ),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
           child: Column(
             children: [
               Card(
@@ -3636,52 +3170,18 @@ Valid Until: ${calculateValidUntil(voucher.date)}
                           letterSpacing: 2,
                         ),
                       ),
-                      const SizedBox(height: 15),
-                      QrImageView(
-                        data: voucher.pin,
-                        size: 210,
-                        backgroundColor: Colors.white,
-                      ),
-                      const Divider(
-                        height: 30,
-                      ),
-                      infoRow(
-                        'Emp Code',
-                        voucher.empCode,
-                      ),
-                      infoRow(
-                        'Name',
-                        voucher.name,
-                      ),
-                      infoRow(
-                        'Company',
-                        voucher.company,
-                      ),
-                      infoRow(
-                        'Mobile No',
-                        voucher.mobile,
-                      ),
-                      infoRow(
-                        'Room No',
-                        voucher.room,
-                      ),
-                      infoRow(
-                        'Date',
-                        voucher.date,
-                      ),
-                      infoRow(
-                        'Time',
-                        voucher.time,
-                      ),
-                      infoRow(
-                        'Issued By',
-                        voucher.issuedBy,
-                      ),
+                      const Divider(height: 30),
+                      infoRow('Emp Code', voucher.empCode),
+                      infoRow('Name', voucher.name),
+                      infoRow('Company', voucher.company),
+                      infoRow('Mobile No', voucher.mobile),
+                      infoRow('Room No', voucher.room),
+                      infoRow('Date', voucher.date),
+                      infoRow('Time', voucher.time),
+                      infoRow('Issued By', voucher.issuedBy),
                       infoRow(
                         'Valid Until',
-                        calculateValidUntil(
-                          voucher.date,
-                        ),
+                        calculateValidUntil(voucher.date),
                       ),
                     ],
                   ),
@@ -3692,33 +3192,17 @@ Valid Until: ${calculateValidUntil(voucher.date)}
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        shareVoucher(
-                          context,
-                        );
-                      },
-                      icon: const Icon(
-                        Icons.share,
-                      ),
-                      label: const Text(
-                        'WHATSAPP',
-                      ),
+                      onPressed: () => shareVoucher(context),
+                      icon: const Icon(Icons.share),
+                      label: const Text('WHATSAPP'),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: FilledButton.icon(
-                      onPressed: () {
-                        printVoucher(
-                          context,
-                        );
-                      },
-                      icon: const Icon(
-                        Icons.print,
-                      ),
-                      label: const Text(
-                        'PRINT',
-                      ),
+                      onPressed: () => printVoucher(context),
+                      icon: const Icon(Icons.print),
+                      label: const Text('PRINT'),
                     ),
                   ),
                 ],
@@ -3731,14 +3215,12 @@ Valid Until: ${calculateValidUntil(voucher.date)}
     );
   }
 
-  Widget infoRow(
-    String title,
-    String value,
-  ) {
+  // ============================================================
+  // VOUCHER DETAIL ROW
+  // ============================================================
+  Widget infoRow(String title, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(
-        vertical: 5,
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3773,7 +3255,7 @@ class HistoryPage extends StatefulWidget {
   State<HistoryPage> createState() => _HistoryPageState();
 }
 
-class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
+class _HistoryPageState extends State<HistoryPage> {
   DateTime fromDate = DateTime.now();
 
   DateTime toDate = DateTime.now();
@@ -3784,126 +3266,11 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   final TextEditingController empCodeController = TextEditingController();
 
-  Timer? historySyncTimer;
-
-  bool syncingHistory = false;
-
-  @override
-  void initState() {
-    super.initState();
-
-    WidgetsBinding.instance.addObserver(
-      this,
-    );
-
-    // ========================================================
-    // LOAD LOCAL CACHE IMMEDIATELY
-    // THEN SYNC SERVER IN BACKGROUND
-    // ========================================================
-
-    _loadHistoryCacheAndSync();
-
-    // ========================================================
-    // BACKGROUND SYNC EVERY 2 MINUTES
-    // ========================================================
-
-    historySyncTimer = Timer.periodic(
-      const Duration(minutes: 2),
-      (_) {
-        _syncHistoryInBackground();
-      },
-    );
-  }
-
-  @override
-  void didChangeAppLifecycleState(
-    AppLifecycleState state,
-  ) {
-    if (state == AppLifecycleState.resumed) {
-      _syncHistoryInBackground();
-    }
-  }
-
   @override
   void dispose() {
-    historySyncTimer?.cancel();
-
-    WidgetsBinding.instance.removeObserver(
-      this,
-    );
-
     empCodeController.dispose();
-
     super.dispose();
   }
-
-  // ==========================================================
-  // LOAD CACHE + BACKGROUND SERVER SYNC
-  // ==========================================================
-
-  Future<void> _loadHistoryCacheAndSync() async {
-    try {
-      final cached = await api.getCachedHistory();
-
-      if (mounted) {
-        setState(() {
-          history = _filterHistory(
-            cached,
-          );
-        });
-      }
-    } catch (e) {
-      debugPrint(
-        'HISTORY CACHE LOAD ERROR: $e',
-      );
-    }
-
-    // Do not wait for this before showing cache.
-    await _syncHistoryInBackground();
-  }
-
-  Future<void> _syncHistoryInBackground() async {
-    if (syncingHistory) {
-      return;
-    }
-
-    syncingHistory = true;
-
-    try {
-      final from = dateString(fromDate);
-      final to = dateString(toDate);
-
-      await api.getHistory(
-        fromDate: from,
-        toDate: to,
-      );
-
-      final cached = await api.getCachedHistory();
-
-      if (mounted) {
-        setState(() {
-          history = _filterHistory(
-            cached,
-          );
-        });
-      }
-    } catch (e) {
-      // ======================================================
-      // IMPORTANT:
-      // BACKGROUND SYNC ERROR SHOULD NOT REMOVE CACHE
-      // ======================================================
-
-      debugPrint(
-        'BACKGROUND HISTORY SYNC ERROR: $e',
-      );
-    } finally {
-      syncingHistory = false;
-    }
-  }
-
-  // ==========================================================
-  // DATE PICKER
-  // ==========================================================
 
   Future<void> selectFromDate() async {
     final picked = await showDatePicker(
@@ -3917,9 +3284,6 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       setState(() {
         fromDate = picked;
       });
-
-      // Refresh current selected range in background.
-      _syncHistoryInBackground();
     }
   }
 
@@ -3935,9 +3299,6 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       setState(() {
         toDate = picked;
       });
-
-      // Refresh current selected range in background.
-      _syncHistoryInBackground();
     }
   }
 
@@ -3950,70 +3311,7 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   // ==========================================================
-  // FILTER LOCAL CACHE
-  // ==========================================================
-
-  List<VoucherRecord> _filterHistory(
-    List<VoucherRecord> source,
-  ) {
-    final start = DateTime(
-      fromDate.year,
-      fromDate.month,
-      fromDate.day,
-    );
-
-    final end = DateTime(
-      toDate.year,
-      toDate.month,
-      toDate.day,
-      23,
-      59,
-      59,
-      999,
-    );
-
-    final searchEmpCode = empCodeController.text.trim().toUpperCase();
-
-    final filtered = source.where((item) {
-      final recordDateTime = parseVoucherDateTime(
-        item.date,
-        item.time,
-      );
-
-      if (recordDateTime.isBefore(start) || recordDateTime.isAfter(end)) {
-        return false;
-      }
-
-      if (searchEmpCode.isEmpty) {
-        return true;
-      }
-
-      return item.empCode.trim().toUpperCase().contains(searchEmpCode);
-    }).toList();
-
-    filtered.sort(
-      (a, b) {
-        return parseVoucherDateTime(
-          b.date,
-          b.time,
-        ).compareTo(
-          parseVoucherDateTime(
-            a.date,
-            a.time,
-          ),
-        );
-      },
-    );
-
-    return filtered;
-  }
-
-  // ==========================================================
   // SEARCH HISTORY
-  //
-  // 1. Show cache immediately
-  // 2. Server sync
-  // 3. Show updated merged cache
   // ==========================================================
 
   Future<void> searchHistory() async {
@@ -4030,18 +3328,7 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
     FocusScope.of(context).unfocus();
 
-    // ========================================================
-    // FIRST SHOW LOCAL CACHE
-    // ========================================================
-
-    final cached = await api.getCachedHistory();
-
-    if (!mounted) return;
-
-    final cachedFiltered = _filterHistory(cached);
-
     setState(() {
-      history = cachedFiltered;
       loading = true;
     });
 
@@ -4076,32 +3363,62 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         '========================================',
       );
 
-      // ======================================================
-      // SERVER DATA WILL ALSO BE SAVED INTO CACHE
-      // ======================================================
-
-      await api.getHistory(
+      final result = await api.getHistory(
         fromDate: from,
         toDate: to,
+        empCode: searchEmpCode,
       );
-
-      // ======================================================
-      // READ MERGED CACHE
-      // ======================================================
-
-      final merged = await api.getCachedHistory();
 
       if (!mounted) return;
 
-      final filteredResult = _filterHistory(merged);
+      final List<VoucherRecord> filteredResult = searchEmpCode.isEmpty
+          ? List<VoucherRecord>.from(
+              result,
+            )
+          : result.where(
+              (item) {
+                final recordEmpCode = item.empCode.trim().toUpperCase();
+
+                return recordEmpCode.contains(
+                  searchEmpCode,
+                );
+              },
+            ).toList();
+
+      // ========================================================
+      // FINAL SORT
+      //
+      // DATE + TIME DESCENDING
+      // NEWEST FIRST
+      //
+      // IMPORTANT:
+      // PIN / VOUCHER NUMBER IS NOT USED.
+      // ========================================================
+
+      filteredResult.sort(
+        (a, b) {
+          final aDateTime = parseVoucherDateTime(
+            a.date,
+            a.time,
+          );
+
+          final bDateTime = parseVoucherDateTime(
+            b.date,
+            b.time,
+          );
+
+          return bDateTime.compareTo(
+            aDateTime,
+          );
+        },
+      );
 
       setState(() {
         history = filteredResult;
       });
 
       debugPrint(
-        'CACHED + SERVER HISTORY: '
-        '${merged.length}',
+        'TOTAL HISTORY: ${result.length}',
       );
 
       debugPrint(
@@ -4140,8 +3457,7 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           );
         } else {
           showMessage(
-            'No records found for Emp Code: '
-            '$searchEmpCode',
+            'No records found for Emp Code: $searchEmpCode',
           );
         }
       }
@@ -4150,22 +3466,14 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         'HISTORY ERROR: $e',
       );
 
-      // ======================================================
-      // SERVER ERROR:
-      // KEEP LOCAL CACHE RESULT
-      // ======================================================
-
       if (!mounted) return;
 
-      if (cachedFiltered.isEmpty) {
-        showMessage(
-          'Failed to load history',
-        );
-      } else {
-        debugPrint(
-          'SERVER FAILED. SHOWING LOCAL HISTORY CACHE.',
-        );
-      }
+      showMessage(
+        e.toString().replaceFirst(
+              'Exception: ',
+              '',
+            ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -4175,15 +3483,12 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     }
   }
 
-  // ==========================================================
-  // OPEN VOUCHER
-  // ==========================================================
-
   Future<void> openVoucher(
     VoucherRecord item,
   ) async {
     debugPrint(
-      'OPEN HISTORY VOUCHER: ${item.pin}',
+      'OPEN HISTORY VOUCHER: '
+      '${item.pin}',
     );
 
     await Navigator.push(
@@ -4202,18 +3507,26 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  void showMessage(String message) {
+  void showMessage(
+    String message,
+  ) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(
+          message,
+        ),
       ),
     );
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Column(
       children: [
         appHeader(
@@ -4231,7 +3544,9 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 decoration: const InputDecoration(
                   labelText: 'Emp Code',
                   hintText: 'Enter Emp Code',
-                  prefixIcon: Icon(Icons.badge),
+                  prefixIcon: Icon(
+                    Icons.badge,
+                  ),
                 ),
                 onSubmitted: (_) {
                   if (!loading) {
@@ -4239,7 +3554,9 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   }
                 },
               ),
-              const SizedBox(height: 8),
+              const SizedBox(
+                height: 8,
+              ),
               Row(
                 children: [
                   Expanded(
@@ -4255,7 +3572,9 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(
+                    width: 8,
+                  ),
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: loading ? null : selectToDate,
@@ -4271,7 +3590,9 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(
+                height: 8,
+              ),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -4300,7 +3621,9 @@ class _HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   ),
                 )
               : ListView.builder(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(
+                    12,
+                  ),
                   itemCount: history.length,
                   itemBuilder: (
                     context,
@@ -4370,7 +3693,9 @@ Widget appHeader({
       16,
     ),
     decoration: const BoxDecoration(
-      color: Color(0xFF087F5B),
+      color: Color(
+        0xFF087F5B,
+      ),
       borderRadius: BorderRadius.vertical(
         bottom: Radius.circular(20),
       ),
@@ -4382,15 +3707,21 @@ Widget appHeader({
           height: 50,
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(
+              14,
+            ),
           ),
           child: Icon(
             icon,
-            color: const Color(0xFF087F5B),
+            color: const Color(
+              0xFF087F5B,
+            ),
             size: 30,
           ),
         ),
-        const SizedBox(width: 14),
+        const SizedBox(
+          width: 14,
+        ),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -4403,7 +3734,9 @@ Widget appHeader({
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 3),
+              const SizedBox(
+                height: 3,
+              ),
               Text(
                 subtitle,
                 style: const TextStyle(
