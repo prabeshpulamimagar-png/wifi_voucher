@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -2025,10 +2026,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       syncEmployeeCache();
 
+      // Check Master changes every 10 seconds while the app is open.
       employeeSyncTimer = Timer.periodic(
-        const Duration(minutes: 2),
+        const Duration(seconds: 10),
         (_) {
-          syncEmployeeCache();
+          if (WidgetsBinding.instance.lifecycleState ==
+              AppLifecycleState.resumed) {
+            syncEmployeeCache();
+          }
         },
       );
     });
@@ -2171,6 +2176,10 @@ class _IssueVoucherPageState extends State<IssueVoucherPage> {
     });
 
     try {
+      // Check the Master version before using the local employee cache.
+      // If Master changed, refresh the cache first.
+      await api.syncEmployeesIfNeeded();
+
       final result = await api.getEmployee(
         code,
       );
@@ -3008,12 +3017,13 @@ class VoucherResultPage extends StatelessWidget {
   // ============================================================
   // LAN THERMAL PRINTER
   // ============================================================
+  static bool _printing = false;
+
   Future<void> printVoucher(BuildContext context) async {
     const String printerIp = '10.20.6.221';
     const int printerPort = 9100;
 
-    NetworkPrinter? printer;
-    bool connected = false;
+    Socket? socket;
 
     void showMessage(String message) {
       if (context.mounted) {
@@ -3025,84 +3035,105 @@ class VoucherResultPage extends StatelessWidget {
       }
     }
 
+    // Stop accidental double-taps while one print job is being sent.
+    // Once this job finishes, the same voucher can be printed again.
+    if (_printing) {
+      showMessage('अघिल्लो प्रिन्ट भइरहेको छ। कृपया केही क्षण पर्खनुहोस्।');
+      return;
+    }
+
+    _printing = true;
+
     try {
       showMessage('प्रिन्टरसँग जोडिँदै छ...');
 
-      const PaperSize paper = PaperSize.mm80;
-      final profile = await CapabilityProfile.load();
-      printer = NetworkPrinter(paper, profile);
+      // Create a fresh TCP connection for every print job. This avoids
+      // keeping a stale connection open after the printer has been idle.
+      final profile = await CapabilityProfile.load().timeout(
+        const Duration(seconds: 10),
+      );
+      final generator = Generator(PaperSize.mm80, profile);
+      final List<int> bytes = <int>[];
 
-      final PosPrintResult result = await printer
-          .connect(printerIp, port: printerPort)
-          .timeout(const Duration(seconds: 10));
+      bytes.addAll(
+        generator.text(
+          'WIFI VOUCHER',
+          styles: const PosStyles(
+            align: PosAlign.center,
+            bold: true,
+            height: PosTextSize.size2,
+            width: PosTextSize.size2,
+          ),
+        ),
+      );
+      bytes.addAll(generator.feed(1));
 
-      if (result != PosPrintResult.success) {
-        showMessage(
-          'प्रिन्टरमा जडान भएन: ${result.msg}',
-        );
-        return;
+      bytes.addAll(
+        generator.text(
+          'PIN: ${voucher.pin}',
+          styles: const PosStyles(
+            align: PosAlign.center,
+            bold: true,
+            height: PosTextSize.size2,
+            width: PosTextSize.size2,
+          ),
+        ),
+      );
+      bytes.addAll(generator.feed(1));
+
+      bytes.addAll(generator.text('Emp Code: ${voucher.empCode}'));
+      bytes.addAll(generator.text('Name: ${voucher.name}'));
+      bytes.addAll(generator.text('Company: ${voucher.company}'));
+      bytes.addAll(generator.text('Mobile No: ${voucher.mobile}'));
+      bytes.addAll(generator.text('Room No: ${voucher.room}'));
+      bytes.addAll(generator.text('Date: ${voucher.date}'));
+      bytes.addAll(generator.text('Time: ${voucher.time}'));
+      bytes.addAll(generator.text('Issued By: ${voucher.issuedBy}'));
+      bytes.addAll(
+        generator.text(
+          'Valid Until: ${calculateValidUntil(voucher.date)}',
+        ),
+      );
+      bytes.addAll(generator.feed(3));
+      bytes.addAll(generator.cut());
+
+      if (bytes.isEmpty) {
+        throw Exception('प्रिन्ट डेटा तयार भएन।');
       }
 
-      connected = true;
+      socket = await Socket.connect(
+        printerIp,
+        printerPort,
+        timeout: const Duration(seconds: 8),
+      ).timeout(const Duration(seconds: 10));
 
-      // Voucher heading
-      printer.text(
-        'WIFI VOUCHER',
-        styles: const PosStyles(
-          align: PosAlign.center,
-          bold: true,
-          height: PosTextSize.size2,
-          width: PosTextSize.size2,
-        ),
-      );
+      socket.setOption(SocketOption.tcpNoDelay, true);
+      socket.add(bytes);
 
-      printer.feed(1);
-
-      // Voucher PIN
-      printer.text(
-        'PIN: ${voucher.pin}',
-        styles: const PosStyles(
-          align: PosAlign.center,
-          bold: true,
-          height: PosTextSize.size2,
-          width: PosTextSize.size2,
-        ),
-      );
-
-      printer.feed(1);
-
-      // Voucher details
-      printer.text('Emp Code: ${voucher.empCode}');
-      printer.text('Name: ${voucher.name}');
-      printer.text('Company: ${voucher.company}');
-      printer.text('Mobile No: ${voucher.mobile}');
-      printer.text('Room No: ${voucher.room}');
-      printer.text('Date: ${voucher.date}');
-      printer.text('Time: ${voucher.time}');
-      printer.text('Issued By: ${voucher.issuedBy}');
-      printer.text(
-        'Valid Until: ${calculateValidUntil(voucher.date)}',
-      );
-
-      printer.feed(3);
-      printer.cut();
-
-      // Allow time for queued print data to be sent.
-      await Future.delayed(const Duration(milliseconds: 1000));
+      // flush() waits for the local socket buffer to be flushed. It cannot
+      // confirm that paper physically came out, so the message below does
+      // not claim that printing itself was successful.
+      await socket.flush().timeout(const Duration(seconds: 10));
+      await socket.close().timeout(const Duration(seconds: 3));
+      socket = null;
 
       showMessage(
-        'प्रिन्ट डेटा पठाइयो। कागज निस्कियो कि जाँच गर्नुहोस्।',
+        'प्रिन्ट डेटा पठाइयो। कागज ननिस्किएमा प्रिन्टरको LAN जडान र पेपर जाँच गर्नुहोस्।',
       );
+    } on SocketException catch (e) {
+      showMessage('प्रिन्टरसँग LAN जडान भएन: ${e.message}');
+    } on TimeoutException {
+      showMessage(
+          'प्रिन्टरले समयमै प्रतिक्रिया दिएन। LAN जडान जाँच गर्नुहोस्।');
     } catch (e) {
       showMessage('Print error: $e');
     } finally {
-      if (connected && printer != null) {
-        try {
-          printer.disconnect();
-        } catch (_) {
-          // Ignore disconnect errors.
-        }
+      try {
+        socket?.destroy();
+      } catch (_) {
+        // The socket may already be closed by the operating system.
       }
+      _printing = false;
     }
   }
 
