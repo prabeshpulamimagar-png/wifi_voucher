@@ -3094,6 +3094,34 @@ class VoucherResultPage extends StatelessWidget {
           'Valid Until: ${calculateValidUntil(voucher.date)}',
         ),
       );
+
+      // Receipt footer only: no app UI or screen layout changes.
+      bytes.addAll(generator.feed(1));
+      bytes.addAll(
+        generator.text(
+          '------------------------------',
+          styles: const PosStyles(align: PosAlign.center),
+        ),
+      );
+      bytes.addAll(
+        generator.text(
+          'THIS VOUCHER IS NOT REFUNDABLE',
+          styles: const PosStyles(
+            align: PosAlign.center,
+            bold: true,
+          ),
+        ),
+      );
+      bytes.addAll(
+        generator.text(
+          'HAVE A GOOD DAY!',
+          styles: const PosStyles(
+            align: PosAlign.center,
+            bold: true,
+          ),
+        ),
+      );
+
       bytes.addAll(generator.feed(3));
       bytes.addAll(generator.cut());
 
